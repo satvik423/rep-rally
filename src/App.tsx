@@ -60,6 +60,7 @@ const convertWeight = (weight: number, from: 'kg' | 'lb', to: 'kg' | 'lb') => fr
 function App() {
   const [data, setData] = useState<AppData>(loadData)
   const [page, setPage] = useState('Home')
+  const [selectedHistoryExercise, setSelectedHistoryExercise] = useState<Exercise | null>(null)
   const [now, setNow] = useState(Date.now())
   const [notice, setNotice] = useState('')
   const [editingExercise, setEditingExercise] = useState<Exercise | null>(null)
@@ -324,7 +325,7 @@ function App() {
             <label className="field full-field">YouTube link <input type="url" value={exerciseYoutube} onChange={(event) => setExerciseYoutube(event.target.value)} placeholder="https://youtube.com/..." /></label>
           </div><div className="form-actions"><button className="button dark" disabled={!exerciseName.trim()} onClick={saveExercise}>{editingExercise ? 'Save changes' : 'Add exercise'}</button>{editingExercise && <button className="text-button" onClick={resetExerciseForm}>Cancel</button>}</div></div>
           <div className="section-label">EXERCISE LIBRARY <span>{data.exercises.length} exercises</span></div>
-          {data.exercises.length ? <div className="library-list">{data.exercises.map((exercise) => <article className="library-item" key={exercise.id}><div className="exercise-glyph">↗</div><div className="library-info"><h3>{exercise.name}</h3><span>{musclePath(exercise.muscleId)}</span>{exercise.notes && <p>{exercise.notes}</p>}{exercise.youtube && <a href={exercise.youtube} target="_blank" rel="noreferrer">Watch video ↗</a>}</div><div className="item-actions"><button className="text-button" onClick={() => editExercise(exercise)}>Edit</button><button className="icon-button" aria-label={`Delete ${exercise.name}`} onClick={() => removeExercise(exercise.id)}>×</button></div></article>)}</div> : <div className="empty-card compact-empty">No exercises yet. Add your first exercise above.</div>}
+          {data.exercises.length ? <div className="library-list">{data.exercises.map((exercise) => <article className="library-item" key={exercise.id}><div className="exercise-glyph">↗</div><div className="library-info"><h3>{exercise.name}</h3><span>{musclePath(exercise.muscleId)}</span>{exercise.notes && <p>{exercise.notes}</p>}{exercise.youtube && <a href={exercise.youtube} target="_blank" rel="noreferrer">Watch video ↗</a>}</div><div className="item-actions"><button className="text-button" onClick={() => { setSelectedHistoryExercise(exercise); setPage('Exercise history') }}>Progress</button><button className="text-button" onClick={() => editExercise(exercise)}>Edit</button><button className="icon-button" aria-label={`Delete ${exercise.name}`} onClick={() => removeExercise(exercise.id)}>×</button></div></article>)}</div> : <div className="empty-card compact-empty">No exercises yet. Add your first exercise above.</div>}
         </section>}
 
         {page === 'Plans' && <section>
@@ -339,6 +340,14 @@ function App() {
           <div className="eyebrow">YOUR WORK, OVER TIME</div><h1>History</h1><p className="lead">Every completed exercise session, including work and rest time.</p>
           {!data.logs.length ? <div className="empty-card"><div className="empty-icon">◷</div><h2>Your history starts with a session</h2><p>Complete an exercise from today’s plan and it will be saved here.</p><button className="button dark" onClick={() => setPage('Home')}>Go to today <span>→</span></button></div> : <div className="history-list">{[...data.logs].reverse().map((log) => <article className="history-card" key={log.id}><div className="history-date"><span>{formatDay(log.date)}</span><small>{log.planName}</small></div><div className="history-main"><h3>{log.exerciseName}</h3><div className="history-target">Suggested {log.suggestion.sets} × {log.suggestion.reps} · Default {log.targetSets} × {log.targetReps}</div><div className="set-chips">{log.sets.map((set, index) => <span className="set-chip" key={`${log.id}-${index}`}>Set {index + 1}: {set.reps} reps · {set.weight} {set.unit ?? data.defaults.unit}<small>work {formatDuration(set.workSeconds)}{index < log.sets.length - 1 && set.restSeconds ? ` · rest ${formatDuration(set.restSeconds)}` : ''}</small></span>)}</div></div><div className="history-duration"><b>{formatDuration(log.sets.reduce((sum, set) => sum + set.workSeconds + set.restSeconds, 0))}</b><span>total logged</span></div></article>)}</div>}
         </section>}
+
+        {page === 'Exercise history' && selectedHistoryExercise && <ExerciseProgress
+          exercise={selectedHistoryExercise}
+          logs={data.logs.filter((log) => log.exerciseId === selectedHistoryExercise.id)}
+          unit={data.defaults.unit}
+          musclePath={musclePath(selectedHistoryExercise.muscleId)}
+          onBack={() => setPage('Exercises')}
+        />}
 
         {page === 'Settings' && <section>
           <div className="eyebrow">YOUR PREFERENCES</div><h1>Settings</h1><p className="lead">Defaults keep new workouts quick to set up.</p>
@@ -362,6 +371,62 @@ function App() {
     </div></div>}
     {notice && <div className="toast" role="status">{notice}</div>}
   </div>
+}
+
+function ExerciseProgress({ exercise, logs, unit, musclePath, onBack }: {
+  exercise: Exercise; logs: ExerciseLog[]; unit: 'kg' | 'lb'; musclePath: string; onBack: () => void
+}) {
+  const [metric, setMetric] = useState<'weight' | 'reps' | 'volume'>('weight')
+  const sessions = [...logs].sort((a, b) => a.startedAt - b.startedAt).map((log) => {
+    const totalReps = log.sets.reduce((sum, set) => sum + set.reps, 0)
+    const topWeight = log.sets.reduce((top, set) => Math.max(top, convertWeight(set.weight, set.unit ?? unit, unit)), 0)
+    const volume = log.sets.reduce((sum, set) => sum + set.reps * convertWeight(set.weight, set.unit ?? unit, unit), 0)
+    return { log, totalReps, topWeight, volume }
+  })
+  const values = sessions.map((session) => metric === 'weight' ? session.topWeight : metric === 'reps' ? session.totalReps : session.volume)
+  const valueLabel = metric === 'weight' ? `Top set weight (${unit})` : metric === 'reps' ? 'Total reps' : `Training volume (${unit} × reps)`
+  const formatValue = (value: number) => metric === 'weight' ? `${Number(value.toFixed(1))} ${unit}` : Math.round(value).toLocaleString()
+  const firstValue = values[0] ?? 0
+  const latestValue = values.at(-1) ?? 0
+  const change = values.length > 1 ? latestValue - firstValue : null
+  const changeLabel = change === null ? 'Need another session' : `${change > 0 ? '+' : ''}${formatValue(change)}`
+
+  const width = 720, height = 300, left = 62, right = 25, top = 28, bottom = 48
+  const plotWidth = width - left - right, plotHeight = height - top - bottom
+  const spread = Math.max(...values, 0) - Math.min(...values, 0)
+  const padding = spread ? spread * .16 : Math.max(Math.abs(latestValue) * .18, 1)
+  const minValue = Math.max(0, Math.min(...values, 0) - padding)
+  const maxValue = Math.max(...values, 0) + padding || 1
+  const xFor = (index: number) => sessions.length < 2 ? left + plotWidth / 2 : left + index / (sessions.length - 1) * plotWidth
+  const yFor = (value: number) => top + (maxValue - value) / (maxValue - minValue || 1) * plotHeight
+  const points = values.map((value, index) => `${xFor(index)},${yFor(value)}`).join(' ')
+  const labelIndexes = new Set(sessions.length <= 4 ? sessions.map((_, index) => index) : [0, Math.floor((sessions.length - 1) / 2), sessions.length - 1])
+
+  return <section className="exercise-progress">
+    <button className="back-link" onClick={onBack}>← Exercise library</button>
+    <div className="eyebrow">EXERCISE HISTORY / PROGRESS</div>
+    <h1>{exercise.name}</h1>
+    <p className="lead">{musclePath} · {sessions.length} {sessions.length === 1 ? 'session' : 'sessions'} recorded</p>
+    <div className="progress-summary-grid">
+      <div className="progress-summary"><span>LAST SESSION</span><b>{sessions.length ? formatDay(sessions.at(-1)!.log.date) : '—'}</b><small>{sessions.length ? `${sessions.at(-1)!.log.sets.length} sets logged` : 'No sessions yet'}</small></div>
+      <div className="progress-summary"><span>{metric === 'weight' ? 'LAST TOP WEIGHT' : metric === 'reps' ? 'LAST TOTAL REPS' : 'LAST SESSION VOLUME'}</span><b>{sessions.length ? formatValue(latestValue) : '—'}</b><small>{sessions.length ? 'most recent session' : 'Start a workout to track progress'}</small></div>
+      <div className="progress-summary progress-summary-accent"><span>CHANGE SINCE FIRST</span><b>{changeLabel}</b><small>{change === null ? 'One more session unlocks a trend' : `${formatValue(firstValue)} → ${formatValue(latestValue)}`}</small></div>
+    </div>
+    <article className="progress-chart-card">
+      <div className="progress-chart-heading"><div><div className="eyebrow">SESSION BY SESSION</div><h2>{valueLabel}</h2></div><div className="metric-switch" role="group" aria-label="Chart metric">{(['weight', 'reps', 'volume'] as const).map((option) => <button key={option} className={metric === option ? 'active' : ''} onClick={() => setMetric(option)}>{option === 'weight' ? 'Weight' : option === 'reps' ? 'Reps' : 'Volume'}</button>)}</div></div>
+      {!sessions.length ? <div className="progress-empty"><span>↗</span><b>No history yet</b><p>Complete this exercise from a workout plan and the session will appear here.</p></div> : <div className="chart-scroll"><svg className="progress-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${valueLabel} across ${sessions.length} workout sessions`}>
+        {[0, 1, 2, 3].map((step) => {
+          const y = top + step / 3 * plotHeight
+          const value = maxValue - step / 3 * (maxValue - minValue)
+          return <g key={step}><line x1={left} x2={width - right} y1={y} y2={y} className="chart-gridline" /><text x={left - 11} y={y + 4} textAnchor="end" className="chart-axis-label">{formatValue(value)}</text></g>
+        })}
+        {sessions.length > 1 && <polyline points={points} className="chart-line" />}
+        {sessions.map((session, index) => <g key={session.log.id}><circle cx={xFor(index)} cy={yFor(values[index])} r="5" className="chart-point"><title>{formatDay(session.log.date)}: {formatValue(values[index])}</title></circle>{labelIndexes.has(index) && <text x={xFor(index)} y={height - 15} textAnchor="middle" className="chart-axis-label">{formatDay(session.log.date)}</text>}</g>)}
+      </svg></div>}
+      {sessions.length === 1 && <div className="chart-hint">One session logged. Complete the exercise again to see a trend line.</div>}
+    </article>
+    {!!sessions.length && <div className="progress-session-list"><div className="section-label">SESSION DETAILS <span>Most recent first</span></div>{[...sessions].reverse().map(({ log }) => <article className="progress-session-row" key={log.id}><div><b>{formatDay(log.date)}</b><span>{log.planName}</span></div><div className="progress-set-summary">{log.sets.map((set, index) => <span key={`${log.id}-${index}`}>{set.reps} reps · {set.weight} {set.unit ?? unit}</span>)}</div><div className="progress-session-value">{log.sets.length} sets</div></article>)}</div>}
+  </section>
 }
 
 function MuscleBranch({ muscle, all, counts, onDelete, depth }: { muscle: Muscle; all: Muscle[]; counts: Map<string, number>; onDelete: (id: string) => void; depth: number }) {
